@@ -36,6 +36,8 @@ import io
 
 import os
 os.environ["LIBCAMERA_LOG_LEVELS"] = "*:ERROR"
+os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"
+os.environ["OPENCV_VIDEOIO_DEBUG"] = "0"
 
 class BuddyPi:
     """Pi Hardware Service - connects to brain via API"""
@@ -54,12 +56,12 @@ class BuddyPi:
         self.face_recognizer = FaceRecognizer(self.config.model_path, self.config)
         self.stability = StabilityTracker(self.config)
         
-        # Initialize object detection with debug
+        # Initialize object detection
         print(f"🔍 Initializing object detection...")
-        self.object_detector = ObjectDetector(confidence_threshold=0.5)  # Slightly higher threshold
+        self.object_detector = ObjectDetector(confidence_threshold=0.6)
         self.stable_objects = set()
-        self.persistent_objects = set()  # Keep objects longer
-        print(f"✅ Object detection ready with threshold: 0.5")
+        self.persistent_objects = set()
+        print(f"✅ Object detection ready")
         
         # Initialize speech
         self._init_speech()
@@ -102,18 +104,16 @@ class BuddyPi:
         if PICAMERA2_AVAILABLE:
             try:
                 self.picam2 = Picamera2()
-                self.picam2.configure(
-                    self.picam2.create_preview_configuration(
-                        main={
-                            "format": "BGR888",
-                            "size": (
-                                self.config.camera_width,
-                                self.config.camera_height
-                            )
-                        }
-                    )
+                config = self.picam2.create_preview_configuration(
+                    main={
+                        "format": "BGR888",
+                        "size": (self.config.camera_width, self.config.camera_height)
+                    },
+                    buffer_count=2
                 )
+                self.picam2.configure(config)
                 self.picam2.start()
+                time.sleep(0.5)
                 print("📷 CSI camera initialized (Picamera2)")
                 return
             except Exception as e:
@@ -389,9 +389,9 @@ class BuddyPi:
         else:
             self.stability.reset()
         
-        # Process object detection more frequently for better responsiveness
+        # Process object detection less frequently
         current_time = time.time()
-        if (current_time - self.last_object_detection_time) > 2.0:  # Every 2 seconds instead of 5
+        if (current_time - self.last_object_detection_time) > 5.0:
             self.current_detections = self._process_objects(frame)
             self.last_object_detection_time = current_time
         
@@ -716,7 +716,15 @@ class BuddyPi:
             
             self.last_frame = frame.copy()
             processed, face_detected, name, confidence = self._process_frame(frame)
-            cv2.imshow('Buddy Vision', processed)
+            
+            # Show window only every 3rd frame for performance
+            if hasattr(self, '_frame_count'):
+                self._frame_count += 1
+            else:
+                self._frame_count = 0
+            
+            if self._frame_count % 3 == 0:
+                cv2.imshow('Buddy Vision', processed)
             
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):

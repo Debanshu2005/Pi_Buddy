@@ -1,5 +1,5 @@
 # ===============================
-# Core Computer Vision (Python 3.13 compatible)
+# Core Computer Vision (Pi optimized)
 # ===============================
 opencv-python>=4.8.0
 numpy>=1.24.0

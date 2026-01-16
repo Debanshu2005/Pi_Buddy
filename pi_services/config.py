@@ -17,11 +17,11 @@ class Config:
     model_path: str = "models/MobileFaceNet.onnx"
     cascade_path: str = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
     
-    # Camera settings
+    # Camera settings (Pi optimized)
     camera_index: int = 0
-    camera_width: int = 640
-    camera_height: int = 480
-    camera_fps: int = 30
+    camera_width: int = 320
+    camera_height: int = 240
+    camera_fps: int = 15
     camera_buffer_size: int = 1
     
     # Recognition thresholds
@@ -30,12 +30,12 @@ class Config:
     min_face_size: Tuple[int, int] = (40, 40)  # Smaller minimum size
     max_face_size: Tuple[int, int] = (600, 600)
     
-    # Timing settings
-    recognition_interval: float = 0.8  # Even faster recognition attempts
-    sleep_threshold: int = 30  # Frames before going to sleep
-    wake_delay: float = 0.3  # Even faster wake response
-    frame_process_interval: float = 0.06  # Faster frame processing
-    voice_sleep_timeout: float = 3.5  # Increased from 2.5 to 3.5
+    # Timing settings (Pi optimized)
+    recognition_interval: float = 2.0
+    sleep_threshold: int = 30
+    wake_delay: float = 0.5
+    frame_process_interval: float = 0.1
+    voice_sleep_timeout: float = 3.5
     
     # Motion detection
     motion_threshold: int = 80  # Much more lenient movement tolerance
