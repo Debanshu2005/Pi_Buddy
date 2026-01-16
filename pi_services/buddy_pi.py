@@ -3,12 +3,8 @@ Buddy Pi - Hardware Only Service
 Face recognition, voice I/O, camera, objects - NO BRAIN
 Optimized for Raspberry Pi 4B with Python 3.13
 """
-try:
-    from picamera2 import Picamera2
-    PICAMERA2_AVAILABLE = True
-except ImportError:
-    PICAMERA2_AVAILABLE = False
-    print("⚠️ picamera2 not available, will use USB camera only")
+import subprocess
+import shutil
 import cv2
 import numpy as np
 import time
@@ -98,11 +94,12 @@ class BuddyPi:
     def _init_camera(self):
         """Initialize camera (CSI or USB) - Pi 4B optimized"""
         self.cap = None
-        self.picam2 = None
+        self.use_csi = False
 
-        # Try CSI camera via Picamera2 (Raspberry Pi)
-        if PICAMERA2_AVAILABLE:
+        # Check if CSI camera available
+        if shutil.which("rpicam-hello"):
             try:
+                from picamera2 import Picamera2
                 self.picam2 = Picamera2()
                 config = self.picam2.create_preview_configuration(
                     main={
@@ -114,27 +111,26 @@ class BuddyPi:
                 self.picam2.configure(config)
                 self.picam2.start()
                 time.sleep(0.5)
-                print("📷 CSI camera initialized (Picamera2)")
+                self.use_csi = True
+                print("📷 CSI camera initialized")
                 return
             except Exception as e:
-                print(f"⚠️ CSI camera not available: {e}")
+                print(f"⚠️ CSI camera failed: {e}")
 
         # Fallback: USB webcam
         self.cap = cv2.VideoCapture(self.config.camera_index)
-
         if not self.cap.isOpened():
-            raise RuntimeError("Failed to open any camera (CSI or USB)")
+            raise RuntimeError("Failed to open any camera")
 
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, self.config.camera_buffer_size)
         self.cap.set(cv2.CAP_PROP_FPS, self.config.camera_fps)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.camera_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.camera_height)
-
-        print("📷 USB camera initialized (OpenCV)")
+        print("📷 USB camera initialized")
     
     def _read_frame(self):
         """Read frame from CSI or USB camera"""
-        if self.picam2:
+        if self.use_csi and hasattr(self, 'picam2'):
             try:
                 frame = self.picam2.capture_array()
                 return True, frame
