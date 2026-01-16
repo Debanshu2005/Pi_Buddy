@@ -100,23 +100,34 @@ class BuddyPi:
         self.cap = None
 
         # Check CSI availability
+        print(f"Checking for rpicam-hello: {shutil.which('rpicam-hello')}")
         if shutil.which("rpicam-hello"):
             try:
+                print("Starting CSI camera helper...")
                 self.csi_process = subprocess.Popen(
                     ["python3", "csi_camera_helper.py"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
                 )
                 time.sleep(2)
+                print(f"Checking for frame at: {self.csi_frame_path}")
                 if os.path.exists(self.csi_frame_path):
                     self.use_csi = True
                     print("📷 CSI camera started via system Python")
                     atexit.register(self._cleanup_csi)
                     return
                 else:
+                    print("CSI frame file not found, terminating helper")
+                    stdout, stderr = self.csi_process.communicate(timeout=1)
+                    print(f"Helper stdout: {stdout.decode()}")
+                    print(f"Helper stderr: {stderr.decode()}")
                     self.csi_process.terminate()
             except Exception as e:
                 print(f"⚠️ CSI camera failed: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("rpicam-hello not found, using USB camera")
 
         # Fallback: USB webcam
         self.cap = cv2.VideoCapture(self.config.camera_index)
