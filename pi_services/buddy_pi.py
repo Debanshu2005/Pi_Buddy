@@ -105,7 +105,7 @@ class BuddyPi:
             try:
                 print("Starting CSI camera helper...")
                 self.csi_process = subprocess.Popen(
-                    ["python3", "csi_camera_helper.py"],
+                    ["/usr/bin/python3", "csi_camera_helper.py"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE
                 )
