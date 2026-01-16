@@ -5,6 +5,7 @@ Optimized for Raspberry Pi 4B with Python 3.13
 """
 import subprocess
 import shutil
+import atexit
 import cv2
 import numpy as np
 import time
@@ -46,6 +47,7 @@ class BuddyPi:
         
         # Initialize camera
         self._init_camera()
+        self.csi_process = None
         
         # Initialize face components
         self.detector = FaceDetector(self.config.cascade_path, self.config)
@@ -93,27 +95,26 @@ class BuddyPi:
     
     def _init_camera(self):
         """Initialize camera (CSI or USB) - Pi 4B optimized"""
-        self.cap = None
+        self.csi_frame_path = "/tmp/csi_frame.jpg"
         self.use_csi = False
+        self.cap = None
 
-        # Check if CSI camera available
+        # Check CSI availability
         if shutil.which("rpicam-hello"):
             try:
-                from picamera2 import Picamera2
-                self.picam2 = Picamera2()
-                config = self.picam2.create_preview_configuration(
-                    main={
-                        "format": "BGR888",
-                        "size": (self.config.camera_width, self.config.camera_height)
-                    },
-                    buffer_count=2
+                self.csi_process = subprocess.Popen(
+                    ["python3", "csi_camera_helper.py"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
                 )
-                self.picam2.configure(config)
-                self.picam2.start()
-                time.sleep(0.5)
-                self.use_csi = True
-                print("📷 CSI camera initialized")
-                return
+                time.sleep(2)
+                if os.path.exists(self.csi_frame_path):
+                    self.use_csi = True
+                    print("📷 CSI camera started via system Python")
+                    atexit.register(self._cleanup_csi)
+                    return
+                else:
+                    self.csi_process.terminate()
             except Exception as e:
                 print(f"⚠️ CSI camera failed: {e}")
 
@@ -130,12 +131,9 @@ class BuddyPi:
     
     def _read_frame(self):
         """Read frame from CSI or USB camera"""
-        if self.use_csi and hasattr(self, 'picam2'):
-            try:
-                frame = self.picam2.capture_array()
-                return True, frame
-            except Exception:
-                return False, None
+        if self.use_csi and os.path.exists(self.csi_frame_path):
+            frame = cv2.imread(self.csi_frame_path)
+            return (True, frame) if frame is not None else (False, None)
 
         if self.cap:
             return self.cap.read()
@@ -683,6 +681,11 @@ class BuddyPi:
             return text.split("i'm")[1].strip().title()
         return ""
     
+    def _cleanup_csi(self):
+        """Cleanup CSI camera process"""
+        if hasattr(self, 'csi_process') and self.csi_process:
+            self.csi_process.terminate()
+    
     def run(self):
         """Main application loop with independent sleep/wake cycles"""
         self.running = True
@@ -712,15 +715,7 @@ class BuddyPi:
             
             self.last_frame = frame.copy()
             processed, face_detected, name, confidence = self._process_frame(frame)
-            
-            # Show window only every 3rd frame for performance
-            if hasattr(self, '_frame_count'):
-                self._frame_count += 1
-            else:
-                self._frame_count = 0
-            
-            if self._frame_count % 3 == 0:
-                cv2.imshow('Buddy Vision', processed)
+            cv2.imshow('Buddy Vision', processed)
             
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
@@ -793,22 +788,19 @@ class BuddyPi:
         """Clean up resources"""
         self.running = False
         
-        # Clear conversation on shutdown
         try:
-            print("Clearing conversation...")
             requests.post(f"{self.llm_service_url}/clear", timeout=5)
         except:
             pass
         
+        if self.use_csi and hasattr(self, 'csi_process') and self.csi_process:
+            self.csi_process.terminate()
+        
         if hasattr(self, 'cap') and self.cap:
             self.cap.release()
+        
         try:
             cv2.destroyAllWindows()
-        except:
-            pass
-        
-        # Stop pygame mixer
-        try:
             pygame.mixer.quit()
         except:
             pass
