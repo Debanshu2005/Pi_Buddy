@@ -17,9 +17,10 @@ class ObjectDetector:
         # Load ONNX model with Pi 4B optimization
         session_options = ort.SessionOptions()
         session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        session_options.intra_op_num_threads = 4  # Pi 4B has 4 cores
+        session_options.intra_op_num_threads = 4
         
-        self.session = ort.InferenceSession(model_path, session_options)
+        providers = ['CPUExecutionProvider']
+        self.session = ort.InferenceSession(model_path, session_options, providers=providers)
         self.input_name = self.session.get_inputs()[0].name
         self.output_name = self.session.get_outputs()[0].name
         
