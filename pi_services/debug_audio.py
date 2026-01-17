@@ -12,82 +12,62 @@ import os
 def test_buddy_pi_audio():
     """Test exact same config as buddy_pi"""
     
-    # Exact same config as buddy_pi
-    DEVICE = "hw:3,0"
-    SAMPLE_RATE = 48000
-    CHANNELS = 2
-    DURATION = 3
+    print("Available audio devices:")
+    devices = sd.query_devices()
+    for i, device in enumerate(devices):
+        if device['max_input_channels'] > 0:
+            print(f"  {i}: {device['name']} (inputs: {device['max_input_channels']})")
     
-    print("Testing buddy_pi INMP441 configuration...")
-    print(f"Device: {DEVICE}")
-    print(f"Sample rate: {SAMPLE_RATE}Hz")
-    print(f"Channels: {CHANNELS}")
-    print(f"Duration: {DURATION}s")
+    # Test different configurations
+    configs = [
+        ("hw:3,0", 48000, 2, "int32"),
+        ("hw:3,0", 48000, 2, "int16"),
+        (3, 48000, 2, "int32"),  # Try device index instead of name
+        (3, 48000, 2, "int16"),
+    ]
     
-    try:
-        # Record exactly like buddy_pi
-        print("Recording...")
-        audio = sd.rec(
-            int(DURATION * SAMPLE_RATE),
-            samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="int32",  # Same as buddy_pi
-            device=DEVICE
-        )
-        sd.wait()
-        print("Recording finished")
+    for device, rate, channels, dtype in configs:
+        print(f"\nTesting: device={device}, rate={rate}, channels={channels}, dtype={dtype}")
         
-        # Process exactly like buddy_pi
-        mono = audio[:, 1].astype(np.float32)  # Right channel
-        
-        # Check raw level
-        max_level = np.max(np.abs(mono))
-        print(f"Raw audio level: {max_level:.0f}")
-        
-        if max_level < 100:
-            print("❌ Audio too quiet (< 100)")
-            return
-        
-        # Apply buddy_pi processing
-        mono -= np.mean(mono)  # Remove DC
-        mono *= 10.0  # Boost gain
-        
-        # Check after boost
-        boosted_level = np.max(np.abs(mono))
-        print(f"Boosted audio level: {boosted_level:.0f}")
-        
-        # Normalize
-        peak = np.max(np.abs(mono))
-        if peak > 0:
-            mono /= peak
-        
-        # Resample to 16kHz for Vosk
-        mono_16k = signal.resample(mono, int(len(mono) * 16000 / 48000))
-        mono_int16 = (mono_16k * 32767).astype(np.int16)
-        
-        print(f"Resampled to 16kHz: {len(mono_16k)} samples")
-        
-        # Test with Vosk
-        model_path = "models/vosk-model-small-en-us-0.15"
-        if os.path.exists(model_path):
-            print("Testing with Vosk...")
-            model = vosk.Model(model_path)
-            rec = vosk.KaldiRecognizer(model, 16000)
+        try:
+            audio = sd.rec(
+                int(1.0 * rate),
+                samplerate=rate,
+                channels=channels,
+                dtype=dtype,
+                device=device
+            )
+            sd.wait()
             
-            rec.AcceptWaveform(mono_int16.tobytes())
-            result = json.loads(rec.FinalResult())
-            text = result.get('text', '').strip()
-            
-            if text:
-                print(f"✅ Vosk recognized: '{text}'")
+            # Check both channels
+            if channels == 2:
+                left_level = np.max(np.abs(audio[:, 0]))
+                right_level = np.max(np.abs(audio[:, 1]))
+                print(f"  Left channel: {left_level:.0f}")
+                print(f"  Right channel: {right_level:.0f}")
+                
+                if left_level > 0 or right_level > 0:
+                    print(f"  ✅ Audio detected!")
+                    return device, rate, channels, dtype
             else:
-                print("❌ Vosk could not recognize speech")
-        else:
-            print("⚠️ Vosk model not found")
-        
-    except Exception as e:
-        print(f"❌ Error: {e}")
+                level = np.max(np.abs(audio))
+                print(f"  Audio level: {level:.0f}")
+                if level > 0:
+                    print(f"  ✅ Audio detected!")
+                    return device, rate, channels, dtype
+            
+            print(f"  ❌ No audio")
+            
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+    
+    print("\n❌ No working audio configuration found")
+    return None, None, None, None
 
 if __name__ == "__main__":
-    print("Speak clearly for 3 seconds...")
-    test_buddy_pi_audio()
+    print("Speak loudly during tests...")
+    device, rate, channels, dtype = test_buddy_pi_audio()
+    if device is not None:
+        print(f"\n✅ Working config: device={device}, rate={rate}, channels={channels}, dtype={dtype}")
+    else:
+        print("\n❌ INMP441 not working with any configuration")
