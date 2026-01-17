@@ -35,6 +35,7 @@ import pygame
 import io
 import sounddevice as sd
 from scipy.io.wavfile import write
+from scipy import signal
 from pydub import AudioSegment
 from pydub.playback import play
 
@@ -193,7 +194,7 @@ class BuddyPi:
                 return
             
             self.vosk_model = vosk.Model(model_path)
-            self.vosk_rec = vosk.KaldiRecognizer(self.vosk_model, self.sample_rate)
+            self.vosk_rec = vosk.KaldiRecognizer(self.vosk_model, 16000)  # Vosk uses 16kHz
             
             pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
             self.tts_voice = "en-IN-NeerjaNeural"
@@ -533,14 +534,23 @@ class BuddyPi:
             # Use RIGHT channel only (better quality)
             mono = audio[:, 1].astype(np.float32)
             
+            # Check audio level
+            max_level = np.max(np.abs(mono))
+            print(f"Audio level: {max_level:.0f}")
+            
+            if max_level < 1000:  # Very quiet
+                print("Audio too quiet - no speech detected")
+                return ""
+            
             # Remove DC offset and normalize
             mono -= np.mean(mono)
             peak = np.max(np.abs(mono))
             if peak > 0:
                 mono /= peak
             
-            # Convert to int16 for Vosk
-            mono_int16 = (mono * 32767).astype(np.int16)
+            # Convert 48kHz to 16kHz for Vosk
+            mono_16k = signal.resample(mono, int(len(mono) * 16000 / 48000))
+            mono_int16 = (mono_16k * 32767).astype(np.int16)
             
             # Process with Vosk
             self.vosk_rec.AcceptWaveform(mono_int16.tobytes())
@@ -820,10 +830,22 @@ class BuddyPi:
                 # Use RIGHT channel only
                 mono = audio[:, 1].astype(np.float32)
                 mono -= np.mean(mono)
+                
+                # Check audio level
+                max_level = np.max(np.abs(mono))
+                print(f"[SLEEP] Audio level: {max_level:.0f}")
+                
+                if max_level < 1000:  # Very quiet
+                    print("[SLEEP] Audio too quiet")
+                    continue
+                
                 peak = np.max(np.abs(mono))
                 if peak > 0:
                     mono /= peak
-                mono_int16 = (mono * 32767).astype(np.int16)
+                
+                # Convert 48kHz to 16kHz for Vosk
+                mono_16k = signal.resample(mono, int(len(mono) * 16000 / 48000))
+                mono_int16 = (mono_16k * 32767).astype(np.int16)
                 
                 print("[SLEEP] Processing audio...")
                 try:
