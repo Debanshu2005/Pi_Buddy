@@ -181,7 +181,7 @@ class BuddyPi:
                 int(1.0 * self.sample_rate),  # 1 second test
                 samplerate=self.sample_rate,
                 channels=self.channels,
-                dtype="int32",
+                dtype="int16",  # Use int16 instead of int32
                 device=self.audio_device
             )
             sd.wait()
@@ -532,12 +532,12 @@ class BuddyPi:
         try:
             print("🎤 Listening with INMP441...")
             
-            # Record with INMP441 (stereo int32)
+            # Record with INMP441 (stereo int16)
             audio = sd.rec(
                 int(timeout * self.sample_rate),
                 samplerate=self.sample_rate,
                 channels=self.channels,
-                dtype="int32",
+                dtype="int16",  # Use int16 instead of int32
                 device=self.audio_device
             )
             sd.wait()
@@ -829,12 +829,12 @@ class BuddyPi:
             try:
                 print("[SLEEP] Listening for wake word...")
                 
-                # Record with INMP441 (stereo int32)
+                # Record with INMP441 (stereo int16)
                 audio = sd.rec(
                     int(2.0 * self.sample_rate),
                     samplerate=self.sample_rate,
                     channels=self.channels,
-                    dtype="int32",
+                    dtype="int16",  # Use int16 instead of int32
                     device=self.audio_device
                 )
                 sd.wait()
