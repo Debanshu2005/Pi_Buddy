@@ -549,7 +549,7 @@ class BuddyPi:
             max_level = np.max(np.abs(mono))
             print(f"Audio level: {max_level:.0f}")
             
-            if max_level < 100:  # Lower threshold
+            if max_level < 1:  # Even lower threshold
                 print("Audio too quiet - no speech detected")
                 return ""
             
@@ -848,7 +848,7 @@ class BuddyPi:
                 max_level = np.max(np.abs(mono))
                 print(f"[SLEEP] Audio level: {max_level:.0f}")
                 
-                if max_level < 100:  # Lower threshold
+                if max_level < 1:  # Even lower threshold
                     print("[SLEEP] Audio too quiet")
                     continue
                 

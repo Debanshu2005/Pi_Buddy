@@ -46,8 +46,9 @@ class ObjectDetector:
             return ["0 bottle", "1 cup", "2 nothing"]
     
     def preprocess_image(self, image):
-        """Preprocess image for ONNX model - ensure uint8 input"""
-        resized = cv2.resize(image, (self.input_width, self.input_height))
+        """Preprocess image for ONNX model - ensure correct input size"""
+        # Resize to exact model input size (224x224)
+        resized = cv2.resize(image, (224, 224))
         rgb_image = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         # Keep as uint8 instead of converting to float32
         processed = np.transpose(rgb_image, (2, 0, 1))
