@@ -18,7 +18,7 @@ class AudioDiagnostics:
     def __init__(self):
         self.sample_rate = 48000
         self.channels = 2
-        self.device = "hw:3,0"
+        self.device = None  # Will be auto-detected
         self.vosk_model = None
         self.vosk_rec = None
         
@@ -62,9 +62,11 @@ class AudioDiagnostics:
             input_devices = []
             for i, device in enumerate(devices):
                 max_inputs = device.get('max_input_channels', 0)
+                device_name = device.get('name', 'Unknown')
+                print(f"Device {i}: {device_name} (inputs: {max_inputs}, outputs: {device.get('max_output_channels', 0)})")
+                
                 if max_inputs > 0:
                     input_devices.append((i, device))
-                    print(f"📱 Input device {i}: {device['name']} ({max_inputs} channels)")
             
             if not input_devices:
                 print("❌ No input devices found")
