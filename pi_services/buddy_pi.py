@@ -498,13 +498,13 @@ class BuddyPi:
                     audio_data += chunk["data"]
             
             if audio_data:
-                # Save to temp file and play via Pi hardware
+                # Save to temp file and play via Pi hardware with specific device
                 temp_audio = "/tmp/tts_output.wav"
                 with open(temp_audio, "wb") as f:
                     f.write(audio_data)
                 
-                # Play using aplay for Pi hardware
-                os.system(f"aplay {temp_audio}")
+                # Play using aplay with specific audio device
+                os.system(f"aplay -D hw:0,0 {temp_audio}")
                     
         except Exception as e:
             print(f"Edge TTS Error: {e}")
@@ -817,12 +817,33 @@ class BuddyPi:
         while self.running and self.sleep_mode:
             try:
                 print("[SLEEP] Listening for wake word...")
-                with self.microphone as source:
-                    audio = self.speech_recognizer.listen(source, timeout=1, phrase_time_limit=2)
+                
+                # Record audio using INMP441 microphones
+                audio = sd.rec(
+                    int(2.0 * self.sample_rate),
+                    samplerate=self.sample_rate,
+                    channels=self.channels,
+                    dtype="int32",
+                    device=self.audio_device
+                )
+                sd.wait()
+                
+                # Mix channels and save
+                left_channel = audio[:, 0].astype(np.float32)
+                right_channel = audio[:, 1].astype(np.float32)
+                mixed_audio = (left_channel + right_channel) / 2
+                mixed_audio *= self.gain
+                mixed_audio = np.clip(mixed_audio, -2**31, 2**31 - 1).astype(np.int32)
+                
+                temp_file = "/tmp/wake_word.wav"
+                write(temp_file, self.sample_rate, mixed_audio)
                 
                 print("[SLEEP] Processing audio...")
                 try:
-                    text = self.speech_recognizer.recognize_google(audio, language='en-IN')
+                    with sr.AudioFile(temp_file) as source:
+                        audio_data = self.speech_recognizer.record(source)
+                    
+                    text = self.speech_recognizer.recognize_google(audio_data, language='en-IN')
                     text_lower = text.lower()
                     print(f"[SLEEP] Heard: '{text}'")
                     
@@ -840,8 +861,6 @@ class BuddyPi:
                     print(f"❌ [SLEEP] Speech service error: {e}")
                     time.sleep(0.5)
                     
-            except sr.WaitTimeoutError:
-                pass  # Normal timeout
             except KeyboardInterrupt:
                 print("\n⚠️ [SLEEP] Interrupted during sleep mode")
                 self.running = False
