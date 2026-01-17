@@ -32,9 +32,15 @@ requests>=2.31.0
 SpeechRecognition>=3.10.0
 edge-tts>=6.1.0
 pygame>=2.5.0
+pydub>=0.25.1
 
 # ===============================
 # Audio dependencies (Pi hardware)
 # ===============================
 pyaudio>=0.2.13
 sounddevice>=0.4.6
+
+# ===============================
+# Hardware control
+# ===============================
+RPi.GPIO>=0.7.1

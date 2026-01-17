@@ -34,6 +34,8 @@ import pygame
 import io
 import sounddevice as sd
 from scipy.io.wavfile import write
+from pydub import AudioSegment
+from pydub.playback import play
 
 import os
 os.environ["LIBCAMERA_LOG_LEVELS"] = "*:ERROR"
@@ -542,8 +544,14 @@ class BuddyPi:
             
             print("Processing speech...")
             
-            # Use speech recognition on the recorded file
-            with sr.AudioFile(temp_file) as source:
+            # Convert to format compatible with speech recognition
+            audio_segment = AudioSegment.from_wav(temp_file)
+            audio_segment = audio_segment.set_frame_rate(16000).set_channels(1)
+            converted_file = "/tmp/speech_converted.wav"
+            audio_segment.export(converted_file, format="wav")
+            
+            # Use speech recognition on the converted file
+            with sr.AudioFile(converted_file) as source:
                 audio_data = self.speech_recognizer.record(source)
             
             try:
@@ -840,7 +848,13 @@ class BuddyPi:
                 
                 print("[SLEEP] Processing audio...")
                 try:
-                    with sr.AudioFile(temp_file) as source:
+                    # Convert to format compatible with speech recognition
+                    audio_segment = AudioSegment.from_wav(temp_file)
+                    audio_segment = audio_segment.set_frame_rate(16000).set_channels(1)
+                    converted_file = "/tmp/wake_converted.wav"
+                    audio_segment.export(converted_file, format="wav")
+                    
+                    with sr.AudioFile(converted_file) as source:
                         audio_data = self.speech_recognizer.record(source)
                     
                     text = self.speech_recognizer.recognize_google(audio_data, language='en-IN')
