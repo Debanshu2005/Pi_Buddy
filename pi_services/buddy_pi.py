@@ -175,15 +175,26 @@ class BuddyPi:
             self.sample_rate = 48000
             self.channels = 2
             
-            # Test INMP441 device
+            # Test INMP441 device with longer test
+            print("Testing INMP441 device...")
             test_audio = sd.rec(
-                int(0.1 * self.sample_rate),
+                int(1.0 * self.sample_rate),  # 1 second test
                 samplerate=self.sample_rate,
                 channels=self.channels,
                 dtype="int32",
                 device=self.audio_device
             )
             sd.wait()
+            
+            # Check if we got any audio
+            max_level = np.max(np.abs(test_audio))
+            print(f"INMP441 test level: {max_level:.0f}")
+            
+            if max_level == 0:
+                print("⚠️ INMP441 not capturing audio - check connections")
+                self.speech_enabled = False
+                return
+            
             print("✅ INMP441 hw:3,0 working")
             
             # Initialize Vosk model

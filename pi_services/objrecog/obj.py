@@ -46,13 +46,13 @@ class ObjectDetector:
             return ["0 bottle", "1 cup", "2 nothing"]
     
     def preprocess_image(self, image):
-        """Preprocess image for ONNX model"""
+        """Preprocess image for ONNX model - ensure uint8 input"""
         resized = cv2.resize(image, (self.input_width, self.input_height))
         rgb_image = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-        processed = np.array(rgb_image, dtype=np.float32) / 255.0
-        processed = np.transpose(processed, (2, 0, 1))
+        # Keep as uint8 instead of converting to float32
+        processed = np.transpose(rgb_image, (2, 0, 1))
         processed = np.expand_dims(processed, axis=0)
-        return processed
+        return processed.astype(np.uint8)
     
     def detect(self, frame):
         """Detect objects using ONNX model"""
