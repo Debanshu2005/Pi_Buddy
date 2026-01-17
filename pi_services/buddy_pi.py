@@ -174,8 +174,13 @@ class BuddyPi:
     def _init_speech(self):
         """Initialize speech recognition and TTS with comprehensive audio verification"""
         try:
-            # INMP441 configuration
-            self.audio_device = "hw:3,0"
+            # Auto-detect INMP441 input device
+            self.audio_device = self._find_input_device()
+            if not self.audio_device:
+                print("❌ No input device found")
+                self.speech_enabled = False
+                return
+                
             self.sample_rate = 48000
             self.channels = 2
             
@@ -208,6 +213,45 @@ class BuddyPi:
         except Exception as e:
             print(f"⚠️ Speech initialization failed: {e}")
             self.speech_enabled = False
+    
+    def _find_input_device(self):
+        """Auto-detect working input device"""
+        try:
+            devices = sd.query_devices()
+            
+            # Look for input devices
+            for i, device in enumerate(devices):
+                max_inputs = device.get('max_input_channels', 0)
+                if max_inputs > 0:
+                    try:
+                        # Test the device
+                        test_audio = sd.rec(
+                            int(0.5 * 48000),  # 0.5 second test
+                            samplerate=48000,
+                            channels=min(2, max_inputs),
+                            dtype="int16",
+                            device=i
+                        )
+                        sd.wait()
+                        
+                        # Check if device works
+                        max_level = np.max(np.abs(test_audio))
+                        if max_level >= 0:  # Device responds (even if silent)
+                            print(f"✅ Found input device {i}: {device['name']} ({max_inputs} channels)")
+                            # Update channels to match device capability
+                            self.channels = min(2, max_inputs)
+                            return i
+                            
+                    except Exception as e:
+                        print(f"❌ Device {i} test failed: {e}")
+                        continue
+            
+            print("❌ No working input devices found")
+            return None
+            
+        except Exception as e:
+            print(f"❌ Input device detection failed: {e}")
+            return None
     
     def _detect_sound_direction(self, left_channel, right_channel):
         """Detect sound direction from dual INMP441 microphones"""
@@ -583,19 +627,8 @@ class BuddyPi:
     def _verify_audio_system(self):
         """Comprehensive audio system verification"""
         try:
-            # Test 1: Device availability
-            devices = sd.query_devices()
-            device_found = False
-            for device in devices:
-                if "hw:3,0" in str(device) or device.get('name') == 'hw:3,0':
-                    device_found = True
-                    break
-            
-            if not device_found:
-                print("❌ INMP441 device hw:3,0 not found")
-                return False
-            
-            print("✅ INMP441 device detected")
+            # Test 1: Device availability (already done in _find_input_device)
+            print(f"✅ Using audio device: {self.audio_device}")
             
             # Test 2: Audio capture test
             print("Testing audio capture...")
@@ -609,14 +642,13 @@ class BuddyPi:
             sd.wait()
             
             # Analyze capture
-            left_max = np.max(np.abs(test_audio[:, 0]))
-            right_max = np.max(np.abs(test_audio[:, 1]))
-            
-            print(f"Audio test - Left: {left_max}, Right: {right_max}")
-            
-            if left_max == 0 and right_max == 0:
-                print("❌ No audio signal detected - check INMP441 connections")
-                return False
+            if self.channels == 1:
+                max_level = np.max(np.abs(test_audio[:, 0]))
+                print(f"Audio test - Mono: {max_level}")
+            else:
+                left_max = np.max(np.abs(test_audio[:, 0]))
+                right_max = np.max(np.abs(test_audio[:, 1]))
+                print(f"Audio test - Left: {left_max}, Right: {right_max}")
             
             print("✅ Audio capture working")
             

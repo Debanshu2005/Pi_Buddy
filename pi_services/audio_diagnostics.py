@@ -58,59 +58,105 @@ class AudioDiagnostics:
             devices = sd.query_devices()
             print(f"Available devices: {len(devices)}")
             
-            # Look for hw:3,0 device
-            target_found = False
+            # Look for input devices
+            input_devices = []
             for i, device in enumerate(devices):
-                if "hw:3,0" in str(device) or device['name'] == 'hw:3,0':
-                    target_found = True
-                    print(f"✅ Found INMP441 device: {device}")
-                    break
+                max_inputs = device.get('max_input_channels', 0)
+                if max_inputs > 0:
+                    input_devices.append((i, device))
+                    print(f"📱 Input device {i}: {device['name']} ({max_inputs} channels)")
             
-            if not target_found:
-                print("❌ INMP441 device hw:3,0 not found")
-                print("Available devices:")
-                for i, device in enumerate(devices):
-                    print(f"  {i}: {device}")
+            if not input_devices:
+                print("❌ No input devices found")
                 return False
-                
-            return True
             
+            # Try to find the actual INMP441 input device
+            # It might not be hw:3,0 but could be a different index
+            for device_id, device in input_devices:
+                try:
+                    print(f"Testing device {device_id}: {device['name']}")
+                    test_audio = sd.rec(
+                        int(0.5 * self.sample_rate),
+                        samplerate=self.sample_rate,
+                        channels=min(self.channels, device['max_input_channels']),
+                        dtype="int16",
+                        device=device_id
+                    )
+                    sd.wait()
+                    
+                    max_level = np.max(np.abs(test_audio))
+                    print(f"  Test result: max level {max_level}")
+                    
+                    if max_level > 0:
+                        print(f"✅ Working input device found: {device_id} - {device['name']}")
+                        # Update the device for the rest of the tests
+                        self.device = device_id
+                        return True
+                        
+                except Exception as e:
+                    print(f"  ❌ Device {device_id} test failed: {e}")
+                    continue
+            
+            print("❌ No working input devices found")
+            return False
+                
         except Exception as e:
             print(f"❌ Device detection failed: {e}")
             return False
     
     def _test_raw_audio_capture(self):
-        """Test raw audio capture from INMP441"""
+        """Test raw audio capture from detected input device"""
         print("\n2️⃣ Testing Raw Audio Capture...")
         
         try:
-            # Record 2 seconds of audio
-            print("Recording 2 seconds...")
+            # Use the device found in detection test
+            print(f"Using device: {self.device}")
+            
+            # Get device info to determine channel count
+            if isinstance(self.device, int):
+                device_info = sd.query_devices(self.device)
+                max_channels = device_info.get('max_input_channels', 2)
+                channels_to_use = min(self.channels, max_channels)
+            else:
+                channels_to_use = self.channels
+            
+            print(f"Recording 2 seconds with {channels_to_use} channels...")
             audio = sd.rec(
                 int(2.0 * self.sample_rate),
                 samplerate=self.sample_rate,
-                channels=self.channels,
+                channels=channels_to_use,
                 dtype="int16",
                 device=self.device
             )
             sd.wait()
             
             # Analyze channels
-            left_channel = audio[:, 0]
-            right_channel = audio[:, 1]
-            
-            left_max = np.max(np.abs(left_channel))
-            right_max = np.max(np.abs(right_channel))
-            left_rms = np.sqrt(np.mean(left_channel.astype(np.float32) ** 2))
-            right_rms = np.sqrt(np.mean(right_channel.astype(np.float32) ** 2))
-            
-            print(f"Left channel  - Max: {left_max:6d}, RMS: {left_rms:8.2f}")
-            print(f"Right channel - Max: {right_max:6d}, RMS: {right_rms:8.2f}")
-            
-            # Check if we got any signal
-            if left_max == 0 and right_max == 0:
-                print("❌ No audio signal detected on either channel")
-                return False
+            if channels_to_use == 1:
+                # Mono device
+                channel_data = audio[:, 0]
+                max_level = np.max(np.abs(channel_data))
+                rms_level = np.sqrt(np.mean(channel_data.astype(np.float32) ** 2))
+                print(f"Mono channel - Max: {max_level:6d}, RMS: {rms_level:8.2f}")
+                
+                if max_level == 0:
+                    print("❌ No audio signal detected")
+                    return False
+            else:
+                # Stereo device
+                left_channel = audio[:, 0]
+                right_channel = audio[:, 1]
+                
+                left_max = np.max(np.abs(left_channel))
+                right_max = np.max(np.abs(right_channel))
+                left_rms = np.sqrt(np.mean(left_channel.astype(np.float32) ** 2))
+                right_rms = np.sqrt(np.mean(right_channel.astype(np.float32) ** 2))
+                
+                print(f"Left channel  - Max: {left_max:6d}, RMS: {left_rms:8.2f}")
+                print(f"Right channel - Max: {right_max:6d}, RMS: {right_rms:8.2f}")
+                
+                if left_max == 0 and right_max == 0:
+                    print("❌ No audio signal detected on either channel")
+                    return False
             
             # Save sample for analysis
             write("/tmp/audio_test.wav", self.sample_rate, audio)
