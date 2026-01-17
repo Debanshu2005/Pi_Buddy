@@ -861,6 +861,10 @@ class BuddyPi:
                             print(f"❌ [SLEEP] Not a wake word: '{text}'")
                     else:
                         print("🔇 [SLEEP] Could not understand audio")
+                        
+                except Exception as e:
+                    print(f"❌ [SLEEP] Vosk error: {e}")
+                    time.sleep(0.5)
                     
             except KeyboardInterrupt:
                 print("\n⚠️ [SLEEP] Interrupted during sleep mode")
