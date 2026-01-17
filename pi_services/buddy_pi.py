@@ -167,73 +167,25 @@ class BuddyPi:
         return False, None
     
     def _init_speech(self):
-        """Initialize speech recognition and TTS - graceful fallback if no audio"""
+        """Initialize speech recognition and TTS with INMP441 right channel"""
         try:
-            import sounddevice as sd
+            # INMP441 configuration that works
+            self.audio_device = "hw:3,0"
+            self.sample_rate = 48000
+            self.channels = 2
             
-            # Check if any audio devices exist
-            try:
-                devices = sd.query_devices()
-                input_devices = [i for i, d in enumerate(devices) if d['max_input_channels'] > 0]
-                
-                if not input_devices:
-                    print("⚠️ No audio input devices found - speech disabled")
-                    self.speech_enabled = False
-                    return
-                
-                print(f"Found {len(input_devices)} input devices")
-                
-            except Exception as e:
-                print(f"⚠️ Audio system unavailable: {e} - speech disabled")
-                self.speech_enabled = False
-                return
+            # Test INMP441 device
+            test_audio = sd.rec(
+                int(0.1 * self.sample_rate),
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype="int32",
+                device=self.audio_device
+            )
+            sd.wait()
+            print("✅ INMP441 hw:3,0 working")
             
-            # Try to find working audio configuration
-            self.audio_device = None
-            self.sample_rate = None
-            self.channels = 1  # Start with mono
-            
-            configs = [
-                (44100, 1), (48000, 1), (22050, 1), (16000, 1),
-                (44100, 2), (48000, 2), (22050, 2), (16000, 2)
-            ]
-            
-            for device_id in input_devices[:3]:  # Test first 3 devices
-                device_info = devices[device_id]
-                for rate, channels in configs:
-                    if channels > device_info['max_input_channels']:
-                        continue
-                    
-                    try:
-                        # Quick test
-                        test_audio = sd.rec(
-                            int(0.1 * rate),
-                            samplerate=rate,
-                            channels=channels,
-                            dtype="int16",
-                            device=device_id
-                        )
-                        sd.wait()
-                        
-                        # Found working config
-                        self.audio_device = device_id
-                        self.sample_rate = rate
-                        self.channels = channels
-                        print(f"✅ Audio: device {device_id}, {rate}Hz, {channels}ch")
-                        break
-                        
-                    except Exception:
-                        continue
-                
-                if self.audio_device is not None:
-                    break
-            
-            if self.audio_device is None:
-                print("⚠️ No working audio configuration - speech disabled")
-                self.speech_enabled = False
-                return
-            
-            # Initialize Vosk if audio works
+            # Initialize Vosk model
             model_path = "models/vosk-model-small-en-us-0.15"
             if not os.path.exists(model_path):
                 print("⚠️ Vosk model not found - speech disabled")
@@ -247,7 +199,7 @@ class BuddyPi:
             self.tts_voice = "en-IN-NeerjaNeural"
             
             self.speech_enabled = True
-            print(f"✅ Speech system ready")
+            print("✅ INMP441 + Vosk ready")
             
         except Exception as e:
             print(f"⚠️ Speech initialization failed: {e} - continuing without speech")
@@ -561,43 +513,42 @@ class BuddyPi:
             print(f"Edge TTS Error: {e}")
     
     def listen_for_speech(self, timeout=6.0):
-        """Listen for speech input using dual INMP441 microphones with Vosk"""
+        """Listen for speech using INMP441 right channel"""
         if not self.speech_enabled:
             return ""
         
         try:
-            print("🎤 Listening with dual INMP441...")
+            print("🎤 Listening with INMP441...")
             
-            # Record audio using dual INMP441 microphones
+            # Record with INMP441 (stereo int32)
             audio = sd.rec(
                 int(timeout * self.sample_rate),
                 samplerate=self.sample_rate,
                 channels=self.channels,
-                dtype="int16",
+                dtype="int32",
                 device=self.audio_device
             )
             sd.wait()
             
-            # Separate channels for direction detection
-            left_channel = audio[:, 0]
-            right_channel = audio[:, 1]
+            # Use RIGHT channel only (better quality)
+            mono = audio[:, 1].astype(np.float32)
             
-            # Detect sound direction
-            direction = self._detect_sound_direction(left_channel, right_channel)
+            # Remove DC offset and normalize
+            mono -= np.mean(mono)
+            peak = np.max(np.abs(mono))
+            if peak > 0:
+                mono /= peak
             
-            # Mix both channels for recognition (boost volume)
-            mixed_audio = ((left_channel.astype(np.float32) + right_channel.astype(np.float32)) / 2)
-            mixed_audio = np.clip(mixed_audio * 2.0, -32768, 32767).astype(np.int16)  # Boost volume
+            # Convert to int16 for Vosk
+            mono_int16 = (mono * 32767).astype(np.int16)
             
-            print("Processing speech with Vosk...")
-            
-            # Process entire audio buffer with Vosk
-            self.vosk_rec.AcceptWaveform(mixed_audio.tobytes())
+            # Process with Vosk
+            self.vosk_rec.AcceptWaveform(mono_int16.tobytes())
             result = json.loads(self.vosk_rec.FinalResult())
             text = result.get('text', '').strip()
             
             if text:
-                print(f"You said ({direction}): '{text}'")
+                print(f"You said: '{text}'")
                 return text
             
             print("Couldn't understand that.")
@@ -856,28 +807,28 @@ class BuddyPi:
             try:
                 print("[SLEEP] Listening for wake word...")
                 
-                # Record audio using INMP441 microphones
+                # Record with INMP441 (stereo int32)
                 audio = sd.rec(
                     int(2.0 * self.sample_rate),
                     samplerate=self.sample_rate,
                     channels=self.channels,
-                    dtype="int16",
+                    dtype="int32",
                     device=self.audio_device
                 )
                 sd.wait()
                 
-                # Mix channels for Vosk processing
-                left_channel = audio[:, 0].astype(np.float32)
-                right_channel = audio[:, 1].astype(np.float32)
-                mixed_audio = ((left_channel + right_channel) / 2).astype(np.int16)
+                # Use RIGHT channel only
+                mono = audio[:, 1].astype(np.float32)
+                mono -= np.mean(mono)
+                peak = np.max(np.abs(mono))
+                if peak > 0:
+                    mono /= peak
+                mono_int16 = (mono * 32767).astype(np.int16)
                 
                 print("[SLEEP] Processing audio...")
                 try:
-                    # Boost volume and process with Vosk
-                    boosted_audio = np.clip(mixed_audio.astype(np.float32) * 2.0, -32768, 32767).astype(np.int16)
-                    
-                    # Process entire buffer and get final result
-                    self.vosk_rec.AcceptWaveform(boosted_audio.tobytes())
+                    # Process with Vosk using right channel
+                    self.vosk_rec.AcceptWaveform(mono_int16.tobytes())
                     result = json.loads(self.vosk_rec.FinalResult())
                     text = result.get('text', '').strip()
                     
