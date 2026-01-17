@@ -46,13 +46,12 @@ class ObjectDetector:
             return ["0 bottle", "1 cup", "2 nothing"]
     
     def preprocess_image(self, image):
-        """Preprocess image for ONNX model - ensure correct input size"""
+        """Preprocess image for ONNX model - correct tensor order"""
         # Resize to exact model input size (224x224)
         resized = cv2.resize(image, (224, 224))
         rgb_image = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-        # Keep as uint8 instead of converting to float32
-        processed = np.transpose(rgb_image, (2, 0, 1))
-        processed = np.expand_dims(processed, axis=0)
+        # Keep HWC format (224, 224, 3) instead of CHW
+        processed = np.expand_dims(rgb_image, axis=0)
         return processed.astype(np.uint8)
     
     def detect(self, frame):

@@ -553,9 +553,9 @@ class BuddyPi:
                 print("Audio too quiet - no speech detected")
                 return ""
             
-            # Remove DC offset and boost gain
+            # Remove DC offset and massive gain boost
             mono -= np.mean(mono)
-            mono *= 10.0  # Boost gain
+            mono *= 1000.0  # Massive boost from 10x to 1000x
             peak = np.max(np.abs(mono))
             if peak > 0:
                 mono /= peak
@@ -842,7 +842,7 @@ class BuddyPi:
                 # Use RIGHT channel only
                 mono = audio[:, 1].astype(np.float32)
                 mono -= np.mean(mono)
-                mono *= 10.0  # Boost gain
+                mono *= 1000.0  # Massive gain boost
                 
                 # Check audio level
                 max_level = np.max(np.abs(mono))
