@@ -218,15 +218,20 @@ class BuddyPi:
         """Auto-detect working input device"""
         try:
             devices = sd.query_devices()
+            print(f"Scanning {len(devices)} audio devices...")
             
             # Look for input devices
             for i, device in enumerate(devices):
                 max_inputs = device.get('max_input_channels', 0)
+                device_name = device.get('name', 'Unknown')
+                print(f"Device {i}: {device_name} (inputs: {max_inputs})")
+                
                 if max_inputs > 0:
                     try:
                         # Test the device
+                        print(f"Testing device {i}...")
                         test_audio = sd.rec(
-                            int(0.5 * 48000),  # 0.5 second test
+                            int(0.5 * 48000),
                             samplerate=48000,
                             channels=min(2, max_inputs),
                             dtype="int16",
@@ -234,17 +239,33 @@ class BuddyPi:
                         )
                         sd.wait()
                         
-                        # Check if device works
                         max_level = np.max(np.abs(test_audio))
-                        if max_level >= 0:  # Device responds (even if silent)
-                            print(f"✅ Found input device {i}: {device['name']} ({max_inputs} channels)")
-                            # Update channels to match device capability
-                            self.channels = min(2, max_inputs)
-                            return i
-                            
+                        print(f"Device {i} test level: {max_level}")
+                        
+                        # Device works if no exception thrown
+                        print(f"✅ Found working input device {i}: {device_name}")
+                        self.channels = min(2, max_inputs)
+                        return i
+                        
                     except Exception as e:
-                        print(f"❌ Device {i} test failed: {e}")
+                        print(f"❌ Device {i} failed: {e}")
                         continue
+            
+            # Try default input device as fallback
+            try:
+                print("Trying default input device...")
+                test_audio = sd.rec(
+                    int(0.5 * 48000),
+                    samplerate=48000,
+                    channels=1,
+                    dtype="int16"
+                )
+                sd.wait()
+                print("✅ Default input device works")
+                self.channels = 1
+                return None  # Use default
+            except Exception as e:
+                print(f"❌ Default input failed: {e}")
             
             print("❌ No working input devices found")
             return None
