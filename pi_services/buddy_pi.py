@@ -25,6 +25,7 @@ from stability_tracker import StabilityTracker
 from objrecog.obj import ObjectDetector
 from servo_controller import ServoController
 from motor_controller import MotorController
+from audio_health_monitor import AudioHealthMonitor
 
 # Speech imports
 import vosk
@@ -72,6 +73,9 @@ class BuddyPi:
         # Initialize hardware controllers
         self.servo = ServoController()
         self.motors = MotorController()
+        
+        # Initialize audio health monitor
+        self.audio_monitor = AudioHealthMonitor()
         
         # Face tracking state
         self.face_lost_count = 0
@@ -168,34 +172,18 @@ class BuddyPi:
         return False, None
     
     def _init_speech(self):
-        """Initialize speech recognition and TTS with INMP441 right channel"""
+        """Initialize speech recognition and TTS with comprehensive audio verification"""
         try:
-            # INMP441 configuration that works
+            # INMP441 configuration
             self.audio_device = "hw:3,0"
             self.sample_rate = 48000
             self.channels = 2
             
-            # Test INMP441 device with longer test
-            print("Testing INMP441 device...")
-            test_audio = sd.rec(
-                int(1.0 * self.sample_rate),  # 1 second test
-                samplerate=self.sample_rate,
-                channels=self.channels,
-                dtype="int16",  # Use int16 instead of int32
-                device=self.audio_device
-            )
-            sd.wait()
-            
-            # Check if we got any audio
-            max_level = np.max(np.abs(test_audio))
-            print(f"INMP441 test level: {max_level:.0f}")
-            
-            if max_level == 0:
-                print("⚠️ INMP441 not capturing audio - check connections")
+            # Comprehensive audio verification
+            if not self._verify_audio_system():
+                print("❌ Audio system verification failed")
                 self.speech_enabled = False
                 return
-            
-            print("✅ INMP441 hw:3,0 working")
             
             # Initialize Vosk model
             model_path = "models/vosk-model-small-en-us-0.15"
@@ -205,16 +193,20 @@ class BuddyPi:
                 return
             
             self.vosk_model = vosk.Model(model_path)
-            self.vosk_rec = vosk.KaldiRecognizer(self.vosk_model, 16000)  # Vosk uses 16kHz
+            self.vosk_rec = vosk.KaldiRecognizer(self.vosk_model, 16000)
             
             pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
             self.tts_voice = "en-IN-NeerjaNeural"
             
             self.speech_enabled = True
-            print("✅ INMP441 + Vosk ready")
+            print("✅ Complete audio system ready")
+            
+            # Start audio health monitoring
+            self.audio_monitor.start_monitoring(check_interval=30)
+            print("✅ Audio health monitoring started")
             
         except Exception as e:
-            print(f"⚠️ Speech initialization failed: {e} - continuing without speech")
+            print(f"⚠️ Speech initialization failed: {e}")
             self.speech_enabled = False
     
     def _detect_sound_direction(self, left_channel, right_channel):
@@ -525,42 +517,50 @@ class BuddyPi:
             print(f"Edge TTS Error: {e}")
     
     def listen_for_speech(self, timeout=6.0):
-        """Listen for speech using INMP441 right channel"""
+        """Listen for speech with robust audio processing"""
         if not self.speech_enabled:
+            print("⚠️ Speech system disabled")
+            return ""
+        
+        # Check audio health before listening
+        health_report = self.audio_monitor.get_health_report()
+        if health_report['status'] != 'HEALTHY':
+            print(f"⚠️ Audio system unhealthy: {health_report}")
             return ""
         
         try:
-            print("🎤 Listening with INMP441...")
+            print("🎤 Listening...")
             
-            # Record with INMP441 (stereo int16)
+            # Record with INMP441
             audio = sd.rec(
                 int(timeout * self.sample_rate),
                 samplerate=self.sample_rate,
                 channels=self.channels,
-                dtype="int16",  # Use int16 instead of int32
+                dtype="int16",
                 device=self.audio_device
             )
             sd.wait()
             
-            # Use RIGHT channel only (better quality)
-            mono = audio[:, 1].astype(np.float32)
+            # Verify audio capture
+            if not self._verify_audio_capture(audio):
+                return ""
             
-            # Check audio level
+            # Process audio
+            left_channel = audio[:, 0].astype(np.float32)
+            right_channel = audio[:, 1].astype(np.float32)
+            mono = (left_channel + right_channel) / 2
+            
             max_level = np.max(np.abs(mono))
             print(f"Audio level: {max_level:.0f}")
             
-            if max_level < 1:  # Even lower threshold
-                print("Audio too quiet - no speech detected")
-                return ""
-            
-            # Remove DC offset and massive gain boost
+            # Process with verified gain
             mono -= np.mean(mono)
-            mono *= 1000.0  # Massive boost from 10x to 1000x
+            mono *= 50000.0
             peak = np.max(np.abs(mono))
             if peak > 0:
                 mono /= peak
             
-            # Convert 48kHz to 16kHz for Vosk
+            # Convert to 16kHz for Vosk
             mono_16k = signal.resample(mono, int(len(mono) * 16000 / 48000))
             mono_int16 = (mono_16k * 32767).astype(np.int16)
             
@@ -569,16 +569,102 @@ class BuddyPi:
             result = json.loads(self.vosk_rec.FinalResult())
             text = result.get('text', '').strip()
             
-            if text:
-                print(f"You said: '{text}'")
+            if text and len(text) > 2:
+                print(f"🎤 You said: '{text}'")
                 return text
-            
-            print("Couldn't understand that.")
-            return ""
+            else:
+                print("🔇 No speech detected")
+                return ""
             
         except Exception as e:
-            print(f"INMP441 audio error: {e}")
+            print(f"❌ Audio error: {e}")
             return ""
+    
+    def _verify_audio_system(self):
+        """Comprehensive audio system verification"""
+        try:
+            # Test 1: Device availability
+            devices = sd.query_devices()
+            device_found = False
+            for device in devices:
+                if "hw:3,0" in str(device) or device.get('name') == 'hw:3,0':
+                    device_found = True
+                    break
+            
+            if not device_found:
+                print("❌ INMP441 device hw:3,0 not found")
+                return False
+            
+            print("✅ INMP441 device detected")
+            
+            # Test 2: Audio capture test
+            print("Testing audio capture...")
+            test_audio = sd.rec(
+                int(2.0 * self.sample_rate),
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype="int16",
+                device=self.audio_device
+            )
+            sd.wait()
+            
+            # Analyze capture
+            left_max = np.max(np.abs(test_audio[:, 0]))
+            right_max = np.max(np.abs(test_audio[:, 1]))
+            
+            print(f"Audio test - Left: {left_max}, Right: {right_max}")
+            
+            if left_max == 0 and right_max == 0:
+                print("❌ No audio signal detected - check INMP441 connections")
+                return False
+            
+            print("✅ Audio capture working")
+            
+            # Test 3: Audio output test
+            print("Testing audio output...")
+            try:
+                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+                print("✅ Audio output system ready")
+            except Exception as e:
+                print(f"⚠️ Audio output test failed: {e}")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Audio verification failed: {e}")
+            return False
+    
+    def _verify_audio_capture(self, audio):
+        """Verify audio capture quality"""
+        try:
+            if audio is None or len(audio) == 0:
+                print("❌ No audio data captured")
+                return False
+            
+            # Check for complete silence
+            max_level = np.max(np.abs(audio))
+            if max_level == 0:
+                print("⚠️ Complete silence detected")
+                return False
+            
+            # Check for clipping
+            if max_level >= 32760:  # Near int16 max
+                print("⚠️ Audio clipping detected")
+            
+            # Check channel balance
+            left_energy = np.mean(np.abs(audio[:, 0]))
+            right_energy = np.mean(np.abs(audio[:, 1]))
+            
+            if left_energy == 0 and right_energy == 0:
+                print("❌ No energy in either channel")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Audio verification error: {e}")
+            return False
     
     def _draw_visualization(self, frame, faces, name=None, confidence=0.0, detections=None):
         """Draw UI overlays with object detection boxes"""
@@ -829,28 +915,33 @@ class BuddyPi:
             try:
                 print("[SLEEP] Listening for wake word...")
                 
-                # Record with INMP441 (stereo int16)
+                # Record with INMP441
                 audio = sd.rec(
                     int(2.0 * self.sample_rate),
                     samplerate=self.sample_rate,
                     channels=self.channels,
-                    dtype="int16",  # Use int16 instead of int32
+                    dtype="int16",
                     device=self.audio_device
                 )
                 sd.wait()
                 
-                # Use RIGHT channel only
-                mono = audio[:, 1].astype(np.float32)
+                # Verify audio capture in sleep mode
+                if not self._verify_audio_capture(audio):
+                    print("[SLEEP] Audio capture issue, retrying...")
+                    time.sleep(1.0)
+                    continue
+                
+                # Process audio
+                left_channel = audio[:, 0].astype(np.float32)
+                right_channel = audio[:, 1].astype(np.float32)
+                mono = (left_channel + right_channel) / 2
+                
                 mono -= np.mean(mono)
-                mono *= 1000.0  # Massive gain boost
+                mono *= 50000.0
                 
                 # Check audio level
                 max_level = np.max(np.abs(mono))
                 print(f"[SLEEP] Audio level: {max_level:.0f}")
-                
-                if max_level < 1:  # Even lower threshold
-                    print("[SLEEP] Audio too quiet")
-                    continue
                 
                 peak = np.max(np.abs(mono))
                 if peak > 0:
@@ -862,7 +953,7 @@ class BuddyPi:
                 
                 print("[SLEEP] Processing audio...")
                 try:
-                    # Process with Vosk using right channel
+                    # Process with Vosk
                     self.vosk_rec.AcceptWaveform(mono_int16.tobytes())
                     result = json.loads(self.vosk_rec.FinalResult())
                     text = result.get('text', '').strip()
@@ -900,6 +991,10 @@ class BuddyPi:
     def cleanup(self):
         """Clean up resources"""
         self.running = False
+        
+        # Stop audio monitoring
+        if hasattr(self, 'audio_monitor'):
+            self.audio_monitor.stop_monitoring()
         
         try:
             requests.post(f"{self.llm_service_url}/clear", timeout=5)
