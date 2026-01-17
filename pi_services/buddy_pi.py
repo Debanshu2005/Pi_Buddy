@@ -167,41 +167,76 @@ class BuddyPi:
         return False, None
     
     def _init_speech(self):
-        """Initialize speech recognition and TTS with dual INMP441 mics"""
+        """Initialize speech recognition and TTS - graceful fallback if no audio"""
         try:
-            # Test multiple sample rates for INMP441 compatibility
-            supported_rates = [44100, 48000, 22050, 16000, 8000]
-            self.audio_device = "hw:3,0"
-            self.channels = 2
-            self.gain = 4.0
+            import sounddevice as sd
             
-            # Find working sample rate
-            working_rate = None
-            for rate in supported_rates:
-                try:
-                    test_audio = sd.rec(
-                        int(0.1 * rate),  # 0.1 second test
-                        samplerate=rate,
-                        channels=self.channels,
-                        dtype="int16",
-                        device=self.audio_device
-                    )
-                    sd.wait()
-                    working_rate = rate
-                    print(f"✅ Sample rate {rate}Hz works")
+            # Check if any audio devices exist
+            try:
+                devices = sd.query_devices()
+                input_devices = [i for i, d in enumerate(devices) if d['max_input_channels'] > 0]
+                
+                if not input_devices:
+                    print("⚠️ No audio input devices found - speech disabled")
+                    self.speech_enabled = False
+                    return
+                
+                print(f"Found {len(input_devices)} input devices")
+                
+            except Exception as e:
+                print(f"⚠️ Audio system unavailable: {e} - speech disabled")
+                self.speech_enabled = False
+                return
+            
+            # Try to find working audio configuration
+            self.audio_device = None
+            self.sample_rate = None
+            self.channels = 1  # Start with mono
+            
+            configs = [
+                (44100, 1), (48000, 1), (22050, 1), (16000, 1),
+                (44100, 2), (48000, 2), (22050, 2), (16000, 2)
+            ]
+            
+            for device_id in input_devices[:3]:  # Test first 3 devices
+                device_info = devices[device_id]
+                for rate, channels in configs:
+                    if channels > device_info['max_input_channels']:
+                        continue
+                    
+                    try:
+                        # Quick test
+                        test_audio = sd.rec(
+                            int(0.1 * rate),
+                            samplerate=rate,
+                            channels=channels,
+                            dtype="int16",
+                            device=device_id
+                        )
+                        sd.wait()
+                        
+                        # Found working config
+                        self.audio_device = device_id
+                        self.sample_rate = rate
+                        self.channels = channels
+                        print(f"✅ Audio: device {device_id}, {rate}Hz, {channels}ch")
+                        break
+                        
+                    except Exception:
+                        continue
+                
+                if self.audio_device is not None:
                     break
-                except Exception:
-                    continue
             
-            if not working_rate:
-                raise Exception("No supported sample rate found for INMP441")
+            if self.audio_device is None:
+                print("⚠️ No working audio configuration - speech disabled")
+                self.speech_enabled = False
+                return
             
-            self.sample_rate = working_rate
-            
-            # Initialize Vosk model
+            # Initialize Vosk if audio works
             model_path = "models/vosk-model-small-en-us-0.15"
             if not os.path.exists(model_path):
-                print("⚠️ Vosk model not found. Download from https://alphacephei.com/vosk/models")
+                print("⚠️ Vosk model not found - speech disabled")
                 self.speech_enabled = False
                 return
             
@@ -212,10 +247,10 @@ class BuddyPi:
             self.tts_voice = "en-IN-NeerjaNeural"
             
             self.speech_enabled = True
-            print(f"✅ Dual INMP441 + Vosk initialized: {self.sample_rate}Hz")
+            print(f"✅ Speech system ready")
             
         except Exception as e:
-            print(f"INMP441 audio initialization failed: {e}")
+            print(f"⚠️ Speech initialization failed: {e} - continuing without speech")
             self.speech_enabled = False
     
     def _detect_sound_direction(self, left_channel, right_channel):
@@ -544,29 +579,23 @@ class BuddyPi:
             sd.wait()
             
             # Separate channels for direction detection
-            left_channel = audio[:, 0].astype(np.float32)
-            right_channel = audio[:, 1].astype(np.float32)
+            left_channel = audio[:, 0]
+            right_channel = audio[:, 1]
             
             # Detect sound direction
             direction = self._detect_sound_direction(left_channel, right_channel)
-            print(f"🎯 Sound from: {direction}")
             
-            # Mix both channels for recognition
-            mixed_audio = ((left_channel + right_channel) / 2).astype(np.int16)
+            # Mix both channels for recognition (boost volume)
+            mixed_audio = ((left_channel.astype(np.float32) + right_channel.astype(np.float32)) / 2)
+            mixed_audio = np.clip(mixed_audio * 2.0, -32768, 32767).astype(np.int16)  # Boost volume
             
             print("Processing speech with Vosk...")
             
-            # Process with Vosk
-            if self.vosk_rec.AcceptWaveform(mixed_audio.tobytes()):
-                result = json.loads(self.vosk_rec.Result())
-                text = result.get('text', '')
-                if text:
-                    print(f"You said ({direction}): '{text}'")
-                    return text
+            # Process entire audio buffer with Vosk
+            self.vosk_rec.AcceptWaveform(mixed_audio.tobytes())
+            result = json.loads(self.vosk_rec.FinalResult())
+            text = result.get('text', '').strip()
             
-            # Get partial result
-            partial = json.loads(self.vosk_rec.PartialResult())
-            text = partial.get('partial', '')
             if text:
                 print(f"You said ({direction}): '{text}'")
                 return text
@@ -832,33 +861,25 @@ class BuddyPi:
                     int(2.0 * self.sample_rate),
                     samplerate=self.sample_rate,
                     channels=self.channels,
-                    dtype="int32",
+                    dtype="int16",
                     device=self.audio_device
                 )
                 sd.wait()
                 
-                # Mix channels and save
+                # Mix channels for Vosk processing
                 left_channel = audio[:, 0].astype(np.float32)
                 right_channel = audio[:, 1].astype(np.float32)
-                mixed_audio = (left_channel + right_channel) / 2
-                mixed_audio *= self.gain
-                mixed_audio = np.clip(mixed_audio, -2**31, 2**31 - 1).astype(np.int32)
-                
-                temp_file = "/tmp/wake_word.wav"
-                write(temp_file, self.sample_rate, mixed_audio)
+                mixed_audio = ((left_channel + right_channel) / 2).astype(np.int16)
                 
                 print("[SLEEP] Processing audio...")
                 try:
-                    # Mix channels for Vosk
-                    mixed_audio = ((left_channel + right_channel) / 2).astype(np.int16)
+                    # Boost volume and process with Vosk
+                    boosted_audio = np.clip(mixed_audio.astype(np.float32) * 2.0, -32768, 32767).astype(np.int16)
                     
-                    # Process with Vosk
-                    if self.vosk_rec.AcceptWaveform(mixed_audio.tobytes()):
-                        result = json.loads(self.vosk_rec.Result())
-                        text = result.get('text', '')
-                    else:
-                        partial = json.loads(self.vosk_rec.PartialResult())
-                        text = partial.get('partial', '')
+                    # Process entire buffer and get final result
+                    self.vosk_rec.AcceptWaveform(boosted_audio.tobytes())
+                    result = json.loads(self.vosk_rec.FinalResult())
+                    text = result.get('text', '').strip()
                     
                     if text:
                         text_lower = text.lower()

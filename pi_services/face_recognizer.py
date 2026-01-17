@@ -33,11 +33,11 @@ class FaceRecognizer:
         self.load_known_faces()
     
     def preprocess_face(self, face_img: np.ndarray) -> np.ndarray:
-        """Preprocess face image for ONNX model"""
+        """Preprocess face image for ONNX model - correct tensor shape"""
         face_resized = cv2.resize(face_img, (112, 112))
         face_normalized = (face_resized - 127.5) / 128.0
-        face_transposed = face_normalized.transpose(2, 0, 1)
-        return np.expand_dims(face_transposed, axis=0).astype(np.float32)
+        # Keep HWC format (112, 112, 3) instead of CHW
+        return np.expand_dims(face_normalized, axis=0).astype(np.float32)
     
     def get_embedding(self, face_img: np.ndarray) -> np.ndarray:
         """Extract face embedding from image"""
