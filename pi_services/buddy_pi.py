@@ -169,11 +169,34 @@ class BuddyPi:
     def _init_speech(self):
         """Initialize speech recognition and TTS with dual INMP441 mics"""
         try:
-            # Dual INMP441 microphone settings
+            # Test multiple sample rates for INMP441 compatibility
+            supported_rates = [44100, 48000, 22050, 16000, 8000]
             self.audio_device = "hw:3,0"
-            self.sample_rate = 16000  # Vosk works best at 16kHz
             self.channels = 2
             self.gain = 4.0
+            
+            # Find working sample rate
+            working_rate = None
+            for rate in supported_rates:
+                try:
+                    test_audio = sd.rec(
+                        int(0.1 * rate),  # 0.1 second test
+                        samplerate=rate,
+                        channels=self.channels,
+                        dtype="int16",
+                        device=self.audio_device
+                    )
+                    sd.wait()
+                    working_rate = rate
+                    print(f"✅ Sample rate {rate}Hz works")
+                    break
+                except Exception:
+                    continue
+            
+            if not working_rate:
+                raise Exception("No supported sample rate found for INMP441")
+            
+            self.sample_rate = working_rate
             
             # Initialize Vosk model
             model_path = "models/vosk-model-small-en-us-0.15"
@@ -188,19 +211,8 @@ class BuddyPi:
             pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
             self.tts_voice = "en-IN-NeerjaNeural"
             
-            # Test dual INMP441 microphones
-            print("Testing dual INMP441 microphones...")
-            test_audio = sd.rec(
-                int(0.5 * self.sample_rate),
-                samplerate=self.sample_rate,
-                channels=self.channels,
-                dtype="int16",
-                device=self.audio_device
-            )
-            sd.wait()
-            
             self.speech_enabled = True
-            print(f"Dual INMP441 + Vosk initialized on {self.audio_device}")
+            print(f"✅ Dual INMP441 + Vosk initialized: {self.sample_rate}Hz")
             
         except Exception as e:
             print(f"INMP441 audio initialization failed: {e}")
