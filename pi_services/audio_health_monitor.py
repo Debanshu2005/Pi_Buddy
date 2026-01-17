@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 
 class AudioHealthMonitor:
-    def __init__(self, device="hw:3,0", sample_rate=48000, channels=2):
+    def __init__(self, device=0, sample_rate=48000, channels=2):
         self.device = device
         self.sample_rate = sample_rate
         self.channels = channels

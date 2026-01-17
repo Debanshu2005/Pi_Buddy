@@ -75,7 +75,7 @@ class BuddyPi:
         self.motors = MotorController()
         
         # Initialize audio health monitor
-        self.audio_monitor = AudioHealthMonitor()
+        self.audio_monitor = AudioHealthMonitor(device=0)  # Use detected device
         
         # Face tracking state
         self.face_lost_count = 0
@@ -206,7 +206,8 @@ class BuddyPi:
             self.speech_enabled = True
             print("✅ Complete audio system ready")
             
-            # Start audio health monitoring
+            # Start audio health monitoring with detected device
+            self.audio_monitor = AudioHealthMonitor(device=self.audio_device)
             self.audio_monitor.start_monitoring(check_interval=30)
             print("✅ Audio health monitoring started")
             
