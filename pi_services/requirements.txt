@@ -34,6 +34,7 @@ edge-tts>=6.1.0
 pygame>=2.5.0
 
 # ===============================
-# Audio dependencies
+# Audio dependencies (Pi hardware)
 # ===============================
 pyaudio>=0.2.13
+sounddevice>=0.4.6

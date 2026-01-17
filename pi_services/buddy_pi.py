@@ -23,6 +23,8 @@ from face_detector import FaceDetector
 from face_recognizer import FaceRecognizer
 from stability_tracker import StabilityTracker
 from objrecog.obj import ObjectDetector
+from servo_controller import ServoController
+from motor_controller import MotorController
 
 # Speech imports
 import speech_recognition as sr
@@ -30,6 +32,8 @@ import edge_tts
 import asyncio
 import pygame
 import io
+import sounddevice as sd
+from scipy.io.wavfile import write
 
 import os
 os.environ["LIBCAMERA_LOG_LEVELS"] = "*:ERROR"
@@ -60,6 +64,14 @@ class BuddyPi:
         self.stable_objects = set()
         self.persistent_objects = set()
         print(f"✅ Object detection ready")
+        
+        # Initialize hardware controllers
+        self.servo = ServoController()
+        self.motors = MotorController()
+        
+        # Face tracking state
+        self.face_lost_count = 0
+        self.max_face_lost = 10
         
         # Initialize speech
         self._init_speech()
@@ -152,30 +164,55 @@ class BuddyPi:
         return False, None
     
     def _init_speech(self):
-        """Initialize speech recognition and TTS"""
+        """Initialize speech recognition and TTS with dual INMP441 mics"""
         try:
+            # Dual INMP441 microphone settings
+            self.audio_device = "hw:3,0"
+            self.sample_rate = 48000
+            self.channels = 2  # Left and right INMP441
+            self.gain = 4.0
+            
             self.speech_recognizer = sr.Recognizer()
-            self.microphone = sr.Microphone()
             
             pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
             self.tts_voice = "en-IN-NeerjaNeural"
             
-            with self.microphone as source:
-                print("Calibrating microphone...")
-                self.speech_recognizer.adjust_for_ambient_noise(source, duration=1.0)
-                # Optimized settings for better accuracy
-                self.speech_recognizer.energy_threshold = 300  # Lower threshold
-                self.speech_recognizer.pause_threshold = 1.0   # Longer pause
-                self.speech_recognizer.phrase_threshold = 0.3  # Shorter phrase start
-                self.speech_recognizer.non_speaking_duration = 0.8  # Better silence detection
-                self.speech_recognizer.dynamic_energy_threshold = True
+            # Test dual INMP441 microphones
+            print("Testing dual INMP441 microphones...")
+            test_audio = sd.rec(
+                int(0.5 * self.sample_rate),
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype="int32",
+                device=self.audio_device
+            )
+            sd.wait()
+            
+            # Optimized settings for INMP441 hardware
+            self.speech_recognizer.energy_threshold = 300
+            self.speech_recognizer.pause_threshold = 1.0
+            self.speech_recognizer.phrase_threshold = 0.3
+            self.speech_recognizer.non_speaking_duration = 0.8
+            self.speech_recognizer.dynamic_energy_threshold = True
             
             self.speech_enabled = True
-            print(f"Speech initialized with voice: {self.tts_voice}")
+            print(f"Dual INMP441 microphones initialized on {self.audio_device}")
             
         except Exception as e:
-            print(f"Speech initialization failed: {e}")
+            print(f"INMP441 audio initialization failed: {e}")
             self.speech_enabled = False
+    
+    def _detect_sound_direction(self, left_channel, right_channel):
+        """Detect sound direction from dual INMP441 microphones"""
+        left_energy = np.mean(np.abs(left_channel))
+        right_energy = np.mean(np.abs(right_channel))
+        
+        if left_energy > right_energy * 1.2:
+            return "LEFT"
+        elif right_energy > left_energy * 1.2:
+            return "RIGHT"
+        else:
+            return "CENTER"
     
     def _startup_greeting(self):
         """Detect and greet person on startup with robust recognition"""
@@ -451,7 +488,7 @@ class BuddyPi:
         threading.Thread(target=_speak, daemon=True).start()
     
     async def _generate_and_play_speech(self, text):
-        """Generate speech using Edge TTS and play it"""
+        """Generate speech using Edge TTS and play via Pi hardware"""
         try:
             communicate = edge_tts.Communicate(text, self.tts_voice)
             
@@ -461,71 +498,75 @@ class BuddyPi:
                     audio_data += chunk["data"]
             
             if audio_data:
-                audio_io = io.BytesIO(audio_data)
-                pygame.mixer.music.load(audio_io)
-                pygame.mixer.music.play()
+                # Save to temp file and play via Pi hardware
+                temp_audio = "/tmp/tts_output.wav"
+                with open(temp_audio, "wb") as f:
+                    f.write(audio_data)
                 
-                while pygame.mixer.music.get_busy():
-                    await asyncio.sleep(0.1)
+                # Play using aplay for Pi hardware
+                os.system(f"aplay {temp_audio}")
                     
         except Exception as e:
             print(f"Edge TTS Error: {e}")
     
     def listen_for_speech(self, timeout=6.0):
-        """Listen for speech input with improved accuracy"""
+        """Listen for speech input using dual INMP441 microphones"""
         if not self.speech_enabled:
             return ""
         
         try:
-            with self.microphone as source:
-                print("🎤 Listening...")
-                # Better audio capture settings
-                audio = self.speech_recognizer.listen(
-                    source, 
-                    timeout=timeout, 
-                    phrase_time_limit=10,  # Longer phrases
-                    snowboy_configuration=None
-                )
+            print("🎤 Listening with dual INMP441...")
+            
+            # Record audio using dual INMP441 microphones
+            audio = sd.rec(
+                int(timeout * self.sample_rate),
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype="int32",
+                device=self.audio_device
+            )
+            sd.wait()
+            
+            # Mix both channels for better audio quality
+            left_channel = audio[:, 0].astype(np.float32)
+            right_channel = audio[:, 1].astype(np.float32)
+            
+            # Combine both INMP441 inputs with gain
+            mixed_audio = (left_channel + right_channel) / 2
+            mixed_audio *= self.gain
+            mixed_audio = np.clip(mixed_audio, -2**31, 2**31 - 1).astype(np.int32)
+            
+            # Save temporary file for speech recognition
+            temp_file = "/tmp/speech_input.wav"
+            write(temp_file, self.sample_rate, mixed_audio)
             
             print("Processing speech...")
             
-            # Try multiple recognition engines for better accuracy
-            text = None
+            # Use speech recognition on the recorded file
+            with sr.AudioFile(temp_file) as source:
+                audio_data = self.speech_recognizer.record(source)
             
-            # Primary: Google (most accurate)
             try:
                 text = self.speech_recognizer.recognize_google(
-                    audio, 
-                    language='en-IN',  # Indian English
-                    show_all=False
+                    audio_data, 
+                    language='en-IN'
                 )
                 print(f"You said: '{text}'")
                 return text
             except sr.UnknownValueError:
-                pass
+                try:
+                    text = self.speech_recognizer.recognize_google(
+                        audio_data, 
+                        language='en-US'
+                    )
+                    print(f"You said (US): '{text}'")
+                    return text
+                except sr.UnknownValueError:
+                    print("Couldn't understand that.")
+                    return ""
             
-            # Fallback: Try with US English
-            try:
-                text = self.speech_recognizer.recognize_google(
-                    audio, 
-                    language='en-US',
-                    show_all=False
-                )
-                print(f"You said (US): '{text}'")
-                return text
-            except sr.UnknownValueError:
-                pass
-            
-            print("Couldn't understand that.")
-            return ""
-            
-        except sr.WaitTimeoutError:
-            return ""
-        except sr.RequestError as e:
-            print(f"Speech service error: {e}")
-            return ""
         except Exception as e:
-            print(f"Speech error: {e}")
+            print(f"INMP441 audio error: {e}")
             return ""
     
     def _draw_visualization(self, frame, faces, name=None, confidence=0.0, detections=None):
@@ -583,6 +624,10 @@ class BuddyPi:
         
         if intent != "conversation":
             print(f"[INTENT: {intent}]")
+            
+            # Handle movement commands
+            if intent in ["move_forward", "move_backward", "move_left", "move_right", "stop"]:
+                self._execute_movement(intent)
         
         # Start TTS with just the reply text
         self.speak(reply)
@@ -596,6 +641,20 @@ class BuddyPi:
         reading_time = min(reading_time, 8.0)  # Cap at 8 seconds max
         
         threading.Timer(reading_time, self._delayed_listening).start()
+    
+    def _execute_movement(self, intent: str):
+        """Execute movement commands based on intent"""
+        movement_map = {
+            "move_forward": lambda: self.motors.move_forward(1.0),
+            "move_backward": lambda: self.motors.move_backward(1.0),
+            "move_left": lambda: self.motors.turn_left(0.5),
+            "move_right": lambda: self.motors.turn_right(0.5),
+            "stop": lambda: self.motors.stop()
+        }
+        
+        if intent in movement_map:
+            print(f"🤖 Executing: {intent}")
+            movement_map[intent]()
     
     def _play_thinking_sound(self):
         """Play thinking sound while processing"""
