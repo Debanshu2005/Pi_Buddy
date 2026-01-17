@@ -469,7 +469,7 @@ class BuddyPi:
             print(f"Force recognition error: {e}")
             return None
     
-    def _process_frame(self, frame: np.ndarray) -> tuple[np.ndarray, bool, Optional[str], float]:
+    def _process_frame(self, frame: np.ndarray) -> tuple:
         """Process frame for face detection and recognition"""
         try:
             faces = self.detector.detect(frame)
