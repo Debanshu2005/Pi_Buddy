@@ -538,12 +538,13 @@ class BuddyPi:
             max_level = np.max(np.abs(mono))
             print(f"Audio level: {max_level:.0f}")
             
-            if max_level < 1000:  # Very quiet
+            if max_level < 100:  # Lower threshold
                 print("Audio too quiet - no speech detected")
                 return ""
             
-            # Remove DC offset and normalize
+            # Remove DC offset and boost gain
             mono -= np.mean(mono)
+            mono *= 10.0  # Boost gain
             peak = np.max(np.abs(mono))
             if peak > 0:
                 mono /= peak
@@ -830,12 +831,13 @@ class BuddyPi:
                 # Use RIGHT channel only
                 mono = audio[:, 1].astype(np.float32)
                 mono -= np.mean(mono)
+                mono *= 10.0  # Boost gain
                 
                 # Check audio level
                 max_level = np.max(np.abs(mono))
                 print(f"[SLEEP] Audio level: {max_level:.0f}")
                 
-                if max_level < 1000:  # Very quiet
+                if max_level < 100:  # Lower threshold
                     print("[SLEEP] Audio too quiet")
                     continue
                 
