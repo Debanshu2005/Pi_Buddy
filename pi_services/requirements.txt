@@ -27,9 +27,9 @@ python-dotenv>=1.0.0
 requests>=2.31.0
 
 # ===============================
-# Speech Recognition and TTS
+# Speech Recognition and TTS (Offline)
 # ===============================
-SpeechRecognition>=3.10.0
+vosk>=0.3.45
 edge-tts>=6.1.0
 pygame>=2.5.0
 pydub>=0.25.1

@@ -27,7 +27,8 @@ from servo_controller import ServoController
 from motor_controller import MotorController
 
 # Speech imports
-import speech_recognition as sr
+import vosk
+import json
 import edge_tts
 import asyncio
 import pygame
@@ -170,11 +171,19 @@ class BuddyPi:
         try:
             # Dual INMP441 microphone settings
             self.audio_device = "hw:3,0"
-            self.sample_rate = 48000
-            self.channels = 2  # Left and right INMP441
+            self.sample_rate = 16000  # Vosk works best at 16kHz
+            self.channels = 2
             self.gain = 4.0
             
-            self.speech_recognizer = sr.Recognizer()
+            # Initialize Vosk model
+            model_path = "models/vosk-model-small-en-us-0.15"
+            if not os.path.exists(model_path):
+                print("⚠️ Vosk model not found. Download from https://alphacephei.com/vosk/models")
+                self.speech_enabled = False
+                return
+            
+            self.vosk_model = vosk.Model(model_path)
+            self.vosk_rec = vosk.KaldiRecognizer(self.vosk_model, self.sample_rate)
             
             pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
             self.tts_voice = "en-IN-NeerjaNeural"
@@ -185,20 +194,13 @@ class BuddyPi:
                 int(0.5 * self.sample_rate),
                 samplerate=self.sample_rate,
                 channels=self.channels,
-                dtype="int32",
+                dtype="int16",
                 device=self.audio_device
             )
             sd.wait()
             
-            # Optimized settings for INMP441 hardware
-            self.speech_recognizer.energy_threshold = 300
-            self.speech_recognizer.pause_threshold = 1.0
-            self.speech_recognizer.phrase_threshold = 0.3
-            self.speech_recognizer.non_speaking_duration = 0.8
-            self.speech_recognizer.dynamic_energy_threshold = True
-            
             self.speech_enabled = True
-            print(f"Dual INMP441 microphones initialized on {self.audio_device}")
+            print(f"Dual INMP441 + Vosk initialized on {self.audio_device}")
             
         except Exception as e:
             print(f"INMP441 audio initialization failed: {e}")
@@ -512,7 +514,7 @@ class BuddyPi:
             print(f"Edge TTS Error: {e}")
     
     def listen_for_speech(self, timeout=6.0):
-        """Listen for speech input using dual INMP441 microphones"""
+        """Listen for speech input using dual INMP441 microphones with Vosk"""
         if not self.speech_enabled:
             return ""
         
@@ -524,54 +526,41 @@ class BuddyPi:
                 int(timeout * self.sample_rate),
                 samplerate=self.sample_rate,
                 channels=self.channels,
-                dtype="int32",
+                dtype="int16",
                 device=self.audio_device
             )
             sd.wait()
             
-            # Mix both channels for better audio quality
+            # Separate channels for direction detection
             left_channel = audio[:, 0].astype(np.float32)
             right_channel = audio[:, 1].astype(np.float32)
             
-            # Combine both INMP441 inputs with gain
-            mixed_audio = (left_channel + right_channel) / 2
-            mixed_audio *= self.gain
-            mixed_audio = np.clip(mixed_audio, -2**31, 2**31 - 1).astype(np.int32)
+            # Detect sound direction
+            direction = self._detect_sound_direction(left_channel, right_channel)
+            print(f"🎯 Sound from: {direction}")
             
-            # Save temporary file for speech recognition
-            temp_file = "/tmp/speech_input.wav"
-            write(temp_file, self.sample_rate, mixed_audio)
+            # Mix both channels for recognition
+            mixed_audio = ((left_channel + right_channel) / 2).astype(np.int16)
             
-            print("Processing speech...")
+            print("Processing speech with Vosk...")
             
-            # Convert to format compatible with speech recognition
-            audio_segment = AudioSegment.from_wav(temp_file)
-            audio_segment = audio_segment.set_frame_rate(16000).set_channels(1)
-            converted_file = "/tmp/speech_converted.wav"
-            audio_segment.export(converted_file, format="wav")
-            
-            # Use speech recognition on the converted file
-            with sr.AudioFile(converted_file) as source:
-                audio_data = self.speech_recognizer.record(source)
-            
-            try:
-                text = self.speech_recognizer.recognize_google(
-                    audio_data, 
-                    language='en-IN'
-                )
-                print(f"You said: '{text}'")
-                return text
-            except sr.UnknownValueError:
-                try:
-                    text = self.speech_recognizer.recognize_google(
-                        audio_data, 
-                        language='en-US'
-                    )
-                    print(f"You said (US): '{text}'")
+            # Process with Vosk
+            if self.vosk_rec.AcceptWaveform(mixed_audio.tobytes()):
+                result = json.loads(self.vosk_rec.Result())
+                text = result.get('text', '')
+                if text:
+                    print(f"You said ({direction}): '{text}'")
                     return text
-                except sr.UnknownValueError:
-                    print("Couldn't understand that.")
-                    return ""
+            
+            # Get partial result
+            partial = json.loads(self.vosk_rec.PartialResult())
+            text = partial.get('partial', '')
+            if text:
+                print(f"You said ({direction}): '{text}'")
+                return text
+            
+            print("Couldn't understand that.")
+            return ""
             
         except Exception as e:
             print(f"INMP441 audio error: {e}")
@@ -848,32 +837,30 @@ class BuddyPi:
                 
                 print("[SLEEP] Processing audio...")
                 try:
-                    # Convert to format compatible with speech recognition
-                    audio_segment = AudioSegment.from_wav(temp_file)
-                    audio_segment = audio_segment.set_frame_rate(16000).set_channels(1)
-                    converted_file = "/tmp/wake_converted.wav"
-                    audio_segment.export(converted_file, format="wav")
+                    # Mix channels for Vosk
+                    mixed_audio = ((left_channel + right_channel) / 2).astype(np.int16)
                     
-                    with sr.AudioFile(converted_file) as source:
-                        audio_data = self.speech_recognizer.record(source)
-                    
-                    text = self.speech_recognizer.recognize_google(audio_data, language='en-IN')
-                    text_lower = text.lower()
-                    print(f"[SLEEP] Heard: '{text}'")
-                    
-                    # Check for wake words
-                    if any(phrase in text_lower for phrase in ['hey buddy', 'wake up', 'buddy wake up']):
-                        print(f"✅ [SLEEP] Wake word detected: '{text}'")
-                        self._wake_up_and_restart()
-                        break
+                    # Process with Vosk
+                    if self.vosk_rec.AcceptWaveform(mixed_audio.tobytes()):
+                        result = json.loads(self.vosk_rec.Result())
+                        text = result.get('text', '')
                     else:
-                        print(f"❌ [SLEEP] Not a wake word: '{text}'")
+                        partial = json.loads(self.vosk_rec.PartialResult())
+                        text = partial.get('partial', '')
+                    
+                    if text:
+                        text_lower = text.lower()
+                        print(f"[SLEEP] Heard: '{text}'")
                         
-                except sr.UnknownValueError:
-                    print("🔇 [SLEEP] Could not understand audio")
-                except sr.RequestError as e:
-                    print(f"❌ [SLEEP] Speech service error: {e}")
-                    time.sleep(0.5)
+                        # Check for wake words
+                        if any(phrase in text_lower for phrase in ['hey buddy', 'wake up', 'buddy wake up']):
+                            print(f"✅ [SLEEP] Wake word detected: '{text}'")
+                            self._wake_up_and_restart()
+                            break
+                        else:
+                            print(f"❌ [SLEEP] Not a wake word: '{text}'")
+                    else:
+                        print("🔇 [SLEEP] Could not understand audio")
                     
             except KeyboardInterrupt:
                 print("\n⚠️ [SLEEP] Interrupted during sleep mode")
